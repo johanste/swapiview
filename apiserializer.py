@@ -117,7 +117,7 @@ class ApiViewNavigationEncoder:
                     }
                 },
                 {
-                    "Text": "Models",
+                    "Text": "Resources",
                     "NavigationId": None,
                     "DefinitionId": None,                
                     "ChildItems": [
@@ -128,7 +128,25 @@ class ApiViewNavigationEncoder:
                             "Tags": {
                                 "TypeKind": "unknown"
                             }
-                        } for definition in document.definitions
+                        } for definition in document.resourcedefinitions
+                    ],
+                    "Tags": {
+                        "TypeKind": "unknown"
+                    }
+                },
+                {
+                    "Text": "Supporting models",
+                    "NavigationId": None,
+                    "DefinitionId": None,                
+                    "ChildItems": [
+                        {
+                            "Text": definition.typename,
+                            "NavigationId": model_definition_id(definition),
+                            "ChildItems": [],
+                            "Tags": {
+                                "TypeKind": "unknown"
+                            }
+                        } for definition in document.supportdefinitions
                     ],
                     "Tags": {
                         "TypeKind": "unknown"
@@ -207,20 +225,42 @@ class ApiViewTokenEncoder:
             tokens += self.serialize_operation(operation)
         return tokens
 
-    def serialize_definition(self, definition:openapi.Definition) -> typing.List[TokenDict]:
-        return (
-            keyword("Model") + whitespace() + typename(definition.typename, definition_id=model_definition_id(definition)) + newline()
-        )
-        
+    def _recurse_serialize_definition(self, modelproperty:"ModelProperty", *, depth=1) -> typing.List[TokenDict]:
+        tokens = []
+        propertytypename = modelproperty.itemtypename or modelproperty.typename
+        if modelproperty.typetype == 'model':
+            propertytypetoken = typename(propertytypename, navigate_to_id=model_definition_id(propertytypename))
+        else:
+            propertytypetoken = keyword(propertytypename)
 
+        if modelproperty.itemtypename:
+            propertytypetoken = punctuation('[') + propertytypetoken + punctuation(']')
+
+        tokens += (
+            whitespace(4*depth) + propertytypetoken + whitespace(1) + member(modelproperty.name) + newline()
+        )
+        for childproperty in modelproperty.properties:
+            tokens += self._recurse_serialize_definition(childproperty, depth=depth + 1)
+
+        return tokens
+
+
+    def serialize_definition(self, resource_or_support: str, definition:openapi.Definition) -> typing.List[TokenDict]:
+        tokens = keyword(resource_or_support) + whitespace() + typename(definition.typename, definition_id=model_definition_id(definition)) + newline()
+        for modelproperty in definition.properties:
+            tokens += self._recurse_serialize_definition(modelproperty)
+        return tokens
+        
     def serialize(self, document):
         tokens = []
         for pathinstance in document.paths:
             tokens += self.serialize_path(pathinstance)
         if tokens:
             tokens += newline() + newline()
-        for definition in document.definitions:
-            tokens += self.serialize_definition(definition)
+        for definition in document.resourcedefinitions:
+            tokens += self.serialize_definition('ResourceModel', definition)
+        for definition in document.supportdefinitions:
+            tokens += self.serialize_definition('InnerModel', definition)
 
         return tokens
 

@@ -6,13 +6,16 @@ import typing
 logger = logging.getLogger(__name__)
 
 
+JsonFragment = typing.Dict[str, typing.Any]
+
 class _OpenApiElement:
-    def __init__(self, document, jsonfragment):
+    def __init__(self, document: "Document", jsonpointer:str, jsonfragment: JsonFragment):
         self.document = document
+        self.jsonpointer = jsonpointer
         self.raw_jsonfragment = jsonfragment
         self.jsonfragment = self.resolve(jsonfragment)
 
-    def resolve(self, jsonfragment):
+    def resolve(self, jsonfragment) -> JsonFragment:
         resolved = jsonfragment.copy()
         try:
             ref = resolved.pop("$ref")
@@ -22,27 +25,28 @@ class _OpenApiElement:
         return resolved
 
 
-class Schema:
+class Schema(_OpenApiElement):
     def __init__(
-        self, document: "Document", jsonfragment: typing.Dict[str, typing.Any]
+        self, document: "Document", jsonpointer:str, jsonfragment: JsonFragment
     ):
-        self.document = document
-        self.jsonfragment = jsonfragment
-
+        super().__init__(document, jsonpointer, jsonfragment)
+        if '$ref' in self.raw_jsonfragment:
+            self.jsonpointer = self.raw_jsonfragment['$ref']
+    
     @property
     def typename(self):
         try:
-            return self.jsonfragment["$ref"].split("/")[-1]
+            return self.raw_jsonfragment["$ref"].split("/")[-1]
         except KeyError:
             return "?"
 
 
 class BodyParameter(_OpenApiElement):
     def __init__(
-        self, document: "Document", jsonfragment: typing.Dict[str, typing.Any]
+        self, document: "Document", jsonpointer: str, jsonfragment: JsonFragment
     ):
-        super().__init__(document, jsonfragment)
-        self.schema = Schema(document, self.jsonfragment["schema"])
+        super().__init__(document, jsonpointer, jsonfragment)
+        self.schema = Schema(document, jsonpointer + '/schema', self.jsonfragment["schema"])
 
     @property
     def typename(self):
@@ -51,14 +55,14 @@ class BodyParameter(_OpenApiElement):
 
 class Response(_OpenApiElement):
     def __init__(
-        self, document: "Document", jsonfragment: typing.Dict[str, typing.Any]
+        self, document: "Document", jsonpointer: str, jsonfragment: typing.Dict[str, typing.Any]
     ):
-        super().__init__(document, jsonfragment)
+        super().__init__(document, jsonpointer, jsonfragment)
         if "schema" in self.jsonfragment:
-            self.schema: typing.Optional[Schema] = Schema(document, self.jsonfragment["schema"])
+            self.schema: typing.Optional[Schema] = Schema(document, jsonpointer=jsonpointer + '/schema', jsonfragment=self.jsonfragment["schema"])
         else:
             self.schema = None
-
+        
     @property
     def typename(self):
         if self.schema:
@@ -85,27 +89,67 @@ class QueryHeaderParameter(_OpenApiElement):
         return self.jsonfragment["name"]
 
 
-class Definition:
+class ModelProperty(_OpenApiElement):
     def __init__(
         self,
         document: "Document",
+        jsonpointer: str,
         name: str,
-        jsonfragment: typing.Dict[str, typing.Any]
+        jsonfragment: JsonFragment
     ):
-        self.typename = name
+        super().__init__(document, jsonpointer, jsonfragment)
+        self.name = name
+        
+        self.typename = self.type_information(self.jsonfragment)
+        if self.typename == 'array':
+            self.itemtypename = self.type_information(self.jsonfragment['items'])
+        else:
+            self.itemtypename = None
 
+        if self.typename in ['string', 'boolean', 'number', 'object']:
+            self.typetype = 'scalar'
+        else:
+            self.typetype = 'model'
 
+        self.properties = [
+            ModelProperty(document, jsonpointer=self.jsonpointer + '/properties/' + name, name=name, jsonfragment=fragment)
+            for name, fragment in self.jsonfragment.get('properties', {}).items()
+        ]
+            
+    def type_information(self, raw_jsonfragment):
+        if '$ref' in raw_jsonfragment:
+            return raw_jsonfragment['$ref'].split('/')[-1]
+        jsonfragment = self.document.resolve_fragment(raw_jsonfragment)
+        if 'type' in jsonfragment:
+            return jsonfragment['type']
+        else:
+            return 'huh?'
 
-class Operation:
+class Definition(_OpenApiElement):
     def __init__(
         self,
         document: "Document",
+        jsonpointer: str,
+        name: str,
+        jsonfragment: JsonFragment
+    ):
+        super().__init__(document, jsonpointer, jsonfragment)
+        self.typename = name
+        self.properties = [
+            ModelProperty(document=document, jsonpointer=jsonpointer + '/properties' + name, name=name, jsonfragment=fragment)
+            for name, fragment in self.jsonfragment.get('properties', {}).items()
+        ]
+
+class Operation(_OpenApiElement):
+    def __init__(
+        self,
+        document: "Document",
+        jsonpointer: str,
         verb: str,
         jsonfragment: typing.Dict[str, typing.Any],
     ):
-        self.document = document
+        super().__init__(document, jsonpointer, jsonfragment)
         self.verb = verb.upper()
-        self.jsonfragment = jsonfragment
 
         parameterjsonfragments = [
             fragment for fragment in self.jsonfragment.get("parameters", [])
@@ -113,38 +157,38 @@ class Operation:
 
         # Extract the body parameter. There is exactly zero or one body parameters...
         try:
-            bodyparameterjsonfragment = [
+            index, bodyparameterjsonfragment = next(enumerate([
                 parameterjsonfragment
                 for parameterjsonfragment in parameterjsonfragments
                 if document.resolve_fragment(parameterjsonfragment).get("in", "")
                 == "body"
-            ][0]
-            self.body_parameter: typing.Optional[BodyParameter] = BodyParameter(document, bodyparameterjsonfragment)
-        except IndexError:
+            ]))
+            self.body_parameter: typing.Optional[BodyParameter] = BodyParameter(document, jsonpointer=jsonpointer + f'[{index}]', jsonfragment=bodyparameterjsonfragment)
+        except StopIteration:
             self.body_parameter = None
 
         # Extract query parameters...
         self.query_parameters = [
-            QueryHeaderParameter(document, parameterjsonfragment)
+            QueryHeaderParameter(document, jsonpointer='unknown', jsonfragment=parameterjsonfragment)
             for parameterjsonfragment in parameterjsonfragments
             if document.resolve_fragment(parameterjsonfragment).get("in", "") == "query"
         ]
 
         self.header_parameters = [
-            QueryHeaderParameter(document, parameterjsonfragment)
+            QueryHeaderParameter(document, jsonpointer='unknown', jsonfragment=parameterjsonfragment)
             for parameterjsonfragment in parameterjsonfragments
             if document.resolve_fragment(parameterjsonfragment).get("in", "")
             == "header"
         ]
 
         self.path_parameters = [
-            QueryHeaderParameter(document, parameterjsonfragment)
+            QueryHeaderParameter(document, jsonpointer='unknown', jsonfragment=parameterjsonfragment)
             for parameterjsonfragment in parameterjsonfragments
             if document.resolve_fragment(parameterjsonfragment).get("in", "") == "path"
         ]
 
         return_values = [
-            Response(document, returnvaluefragment)
+            Response(document, jsonpointer=self.jsonpointer + f'/{status_code}', jsonfragment=returnvaluefragment)
             for status_code, returnvaluefragment in self.jsonfragment.get(
                 "responses", {}
             ).items()
@@ -154,7 +198,7 @@ class Operation:
         ]
         if len(return_values):
             if len(return_values) > 1:
-                logger.warn("Multiple return values for operation {}", self.name)
+                logger.warn("Multiple return values for operation '%s'", self.name)
             self.return_value: typing.Union[Response, VoidResponse] = return_values[0]
         else:
             self.return_value = VoidResponse()
@@ -164,17 +208,16 @@ class Operation:
         return self.jsonfragment.get("operationId", "<Unknown>")
 
 
-class Path:
+class Path(_OpenApiElement):
     def __init__(
-        self, document: "Document", name: str, fragment: typing.Dict[str, typing.Any]
+        self, document: "Document", jsonpointer, name: str, jsonfragment: typing.Dict[str, typing.Any]
     ):
-        self.document = document
+        super().__init__(document, jsonpointer, jsonfragment)
         self.name = name
-        self.jsonfragment = fragment
 
         self.operations = [
-            Operation(document, name, fragment)
-            for name, fragment in self.jsonfragment.items()
+            Operation(document, jsonpointer=jsonpointer + f'/{verb}', verb=verb, jsonfragment=fragment)
+            for verb, fragment in self.jsonfragment.items()
         ]
 
 
@@ -183,13 +226,53 @@ class Document:
         self.file_path = os.path.abspath(file_path)
         self.jsonfragment = self.load_fragment("#/")
         self.paths = [
-            Path(self, name, fragment)
+            Path(self, jsonpointer=f'#/paths/{name}', name=name, jsonfragment=fragment)
             for name, fragment in self.jsonfragment.get("paths", {}).items()
         ]
         self.definitions = [
-            Definition(self, name, fragment)
+            Definition(self, jsonpointer=f'#/definitions/{name}', name=name, jsonfragment=fragment)
             for name, fragment in self.jsonfragment.get('definitions', {}).items()
         ]
+
+    def _extract_references(self):
+        """Extract "resource definitions" - that is, definitions that are direct inputs or outputs
+        of operations.
+        """
+        references = []
+        for path in self.paths:
+            for operation in path.operations:
+                if operation.return_value:
+                    if operation.return_value.schema:
+                        references.append(('out', operation.return_value.schema.jsonpointer))
+                    else:
+                        references.append(('out', operation.return_value.jsonpointer))
+                if operation.body_parameter:
+                    if operation.body_parameter.schema:
+                        references.append(('in', operation.body_parameter.schema.jsonpointer))
+                    else:
+                        references.append(('in', operation.body_parameter.jsonpointer))
+
+        return set(references)
+
+    @property
+    def inputdefinitions(self):
+        jsonpointers = [jsonpointer for direction, jsonpointer in self._extract_references() if direction == 'in']
+        return [definition for definition in self.definitions if definition.jsonpointer in jsonpointers]
+
+    @property
+    def outputdefinitions(self):
+        jsonpointers = [jsonpointer for direction, jsonpointer in self._extract_references() if direction == 'out']
+        return [definition for definition in self.definitions if definition.jsonpointer in jsonpointers]
+
+    @property
+    def supportdefinitions(self):
+        jsonpointers = [jsonpointer for direction, jsonpointer in self._extract_references()]
+        return [definition for definition in self.definitions if definition.jsonpointer not in jsonpointers]
+
+    @property
+    def resourcedefinitions(self):
+        jsonpointers = [jsonpointer for direction, jsonpointer in self._extract_references()]
+        return [definition for definition in self.definitions if definition.jsonpointer in jsonpointers]
 
     def resolve_fragment(
         self, fragment: typing.Dict[str, typing.Any]
@@ -225,6 +308,8 @@ if __name__ == "__main__":
     logging.basicConfig()
 
     doc = Document(sys.argv[1])
+
+    print(doc.inputdefinitions)
 
     for path in doc.paths:
         print(path.name)

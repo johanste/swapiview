@@ -99,8 +99,7 @@ class ModelProperty(_OpenApiElement):
     ):
         super().__init__(document, jsonpointer, jsonfragment)
         self.name = name
-        
-        self.typename = self.type_information(self.jsonfragment)
+        self.typename = self.type_information(self.raw_jsonfragment)
         if self.typename == 'array':
             self.itemtypename = self.type_information(self.jsonfragment['items'])
         else:
@@ -113,7 +112,7 @@ class ModelProperty(_OpenApiElement):
 
         self.properties = [
             ModelProperty(document, jsonpointer=self.jsonpointer + '/properties/' + name, name=name, jsonfragment=fragment)
-            for name, fragment in self.jsonfragment.get('properties', {}).items()
+            for name, fragment in self.raw_jsonfragment.get('properties', {}).items()
         ]
             
     def type_information(self, raw_jsonfragment):
@@ -229,6 +228,8 @@ class Document:
             Path(self, jsonpointer=f'#/paths/{name}', name=name, jsonfragment=fragment)
             for name, fragment in self.jsonfragment.get("paths", {}).items()
         ]
+
+        print(self.jsonfragment.get('definitions', {}).items())
         self.definitions = [
             Definition(self, jsonpointer=f'#/definitions/{name}', name=name, jsonfragment=fragment)
             for name, fragment in self.jsonfragment.get('definitions', {}).items()
@@ -289,7 +290,7 @@ class Document:
         if filepathjsonpointer in (".", "", "./"):
             file_path = self.file_path
         elif not os.path.isabs(filepathjsonpointer):
-            file_path = os.path.join(os.path.dirname(self.file_path), file_path)
+            file_path = os.path.join(os.path.dirname(self.file_path), filepathjsonpointer)
         else:
             file_path = filepathjsonpointer
 
@@ -338,3 +339,6 @@ if __name__ == "__main__":
                 [part for part in (paths, body, query, headers) if part]
             )
             print(f"\t{operation.verb} {operation.name}({parameters})")
+
+    for definition in doc.definitions:
+        print(definition)

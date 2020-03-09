@@ -196,7 +196,7 @@ class Operation(_OpenApiElement):
             not in document.resolve_fragment(returnvaluefragment)
         ]
         if len(return_values):
-            if len(return_values) > 1:
+            if len(set([val.typename for val in return_values if val.typename != 'void'])) > 1:
                 logger.warn("Multiple return values for operation '%s'", self.name)
             self.return_value: typing.Union[Response, VoidResponse] = return_values[0]
         else:
@@ -229,7 +229,6 @@ class Document:
             for name, fragment in self.jsonfragment.get("paths", {}).items()
         ]
 
-        print(self.jsonfragment.get('definitions', {}).items())
         self.definitions = [
             Definition(self, jsonpointer=f'#/definitions/{name}', name=name, jsonfragment=fragment)
             for name, fragment in self.jsonfragment.get('definitions', {}).items()
@@ -257,11 +256,15 @@ class Document:
 
     @property
     def inputdefinitions(self):
+        """Definitions that are directly used as inputs (request body)
+        """
         jsonpointers = [jsonpointer for direction, jsonpointer in self._extract_references() if direction == 'in']
         return [definition for definition in self.definitions if definition.jsonpointer in jsonpointers]
 
     @property
     def outputdefinitions(self):
+        """Definitions that are directly used as outputs (response body)
+        """
         jsonpointers = [jsonpointer for direction, jsonpointer in self._extract_references() if direction == 'out']
         return [definition for definition in self.definitions if definition.jsonpointer in jsonpointers]
 

@@ -38,7 +38,13 @@ class Schema(_OpenApiElement):
         try:
             return self.raw_jsonfragment["$ref"].split("/")[-1]
         except KeyError:
-            return "?"
+            pass
+        if self.raw_jsonfragment.get('type', '') == 'array' and 'items' in self.raw_jsonfragment:
+            return '[' + self.raw_jsonfragment['items']["$ref"].split("/")[-1] + ']'
+        else:
+            return '?'
+
+            
 
 
 class BodyParameter(_OpenApiElement):
@@ -69,6 +75,14 @@ class Response(_OpenApiElement):
             return self.schema.typename
         else:
             return "void"
+
+    @property
+    def http_status_code(self):
+        return int(self.jsonpointer.split('/')[-1])
+
+    @property
+    def is_success_response(self):
+        return self.http_status_code >= 200 and self.http_status_code < 300
 
 class VoidResponse:
 
@@ -195,12 +209,21 @@ class Operation(_OpenApiElement):
             and "x-ms-error-response"
             not in document.resolve_fragment(returnvaluefragment)
         ]
-        if len(return_values):
-            if len(set([val.typename for val in return_values if val.typename != 'void'])) > 1:
-                logger.warn("Multiple return values for operation '%s'", self.name)
-            self.return_value: typing.Union[Response, VoidResponse] = return_values[0]
+        success_responses = [return_value for return_value in return_values if return_value.is_success_response]
+        if len(success_responses):
+            if len(set([val.typename for val in success_responses if val.typename != 'void'])) > 1:
+                logger.warn("Multiple return types for operation '%s'", self.name)
+            self.return_value: typing.Union[Response, VoidResponse] = success_responses[0]
         else:
             self.return_value = VoidResponse()
+
+        exceptions = [return_value for return_value in return_values if not return_value.is_success_response]
+        if len(exceptions):
+            if len(set([val.typename for val in exceptions if val.typename != 'void'])) > 1:
+                logger.warn("Multiple exception types for operation '%s'", self.name)
+            self.exceptions: typing.List[Response] = exceptions
+        else:
+            self.exceptions = []
 
     @property
     def name(self):
@@ -224,10 +247,10 @@ class Document:
     def __init__(self, file_path):
         self.file_path = os.path.abspath(file_path)
         self.jsonfragment = self.load_fragment("#/")
-        self.paths = [
+        self.paths = sorted([
             Path(self, jsonpointer=f'#/paths/{name}', name=name, jsonfragment=fragment)
             for name, fragment in self.jsonfragment.get("paths", {}).items()
-        ]
+        ], key=lambda p: p.name)
 
         self.definitions = [
             Definition(self, jsonpointer=f'#/definitions/{name}', name=name, jsonfragment=fragment)

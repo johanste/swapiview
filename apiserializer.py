@@ -172,10 +172,10 @@ class ApiViewTokenEncoder:
             for parameter in operation.path_parameters:
                 if not first:
                     tokens += punctuation(',') + whitespace()
-                    first = False
                 tokens += (
                     member(parameter.name)
                 )
+                first = False
 
 
         if operation.body_parameter:
@@ -192,16 +192,13 @@ class ApiViewTokenEncoder:
                 if tokens:
                     tokens += punctuation(',') + whitespace()
                 first = True
+                tokens += keyword(group) + whitespace()
                 for parameter in parameters:
                     if not first:
                         tokens += punctuation(',') + whitespace()
-                        first = False
 
-                    tokens += (
-                        keyword(group) +
-                        whitespace() +
-                        member(parameter.name)
-                    )
+                    tokens += member(parameter.name)
+                    first = False
 
         return tokens
 

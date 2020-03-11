@@ -328,43 +328,48 @@ class Document:
                 document = document[part]
         return document
 
+def cli():
+    import argparse
+    DISPLAY_ALL = ('paths', 'operations')
+    parser = argparse.ArgumentParser('swopenapi')
+    parser.add_argument(type=str, dest='filename')
+    parser.add_argument('--debug', action='store_true', dest='debug', default=False)
+    parser.add_argument('--display', dest='displaytype', choices=DISPLAY_ALL, default=DISPLAY_ALL, nargs='*')
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARN)
+
+    doc = Document(args.filename)
+    for path in doc.paths:
+        if 'paths' in args.displaytype:
+            print(path.name)
+        if 'operations' in args.displaytype:
+            for operation in path.operations:
+                body = (
+                    f"BODY {operation.body_parameter.typename}"
+                    if operation.body_parameter
+                    else ""
+                )
+                query = (
+                    f"QUERY " + ", ".join([qp.name for qp in operation.query_parameters])
+                    if operation.query_parameters
+                    else ""
+                )
+                headers = (
+                    f"HEADER " + ", ".join([qp.name for qp in operation.header_parameters])
+                    if operation.header_parameters
+                    else ""
+                )
+                paths = (
+                    f"PATH " + ", ".join([pp.name for pp in operation.path_parameters])
+                    if operation.path_parameters
+                    else ""
+                )
+                parameters = ", ".join(
+                    [part for part in (paths, body, query, headers) if part]
+                )
+                print(f"\t{operation.verb} {operation.name}({parameters})")
 
 if __name__ == "__main__":
-    import sys
+    cli()
 
-    logging.basicConfig()
-
-    doc = Document(sys.argv[1])
-
-    print(doc.inputdefinitions)
-
-    for path in doc.paths:
-        print(path.name)
-        for operation in path.operations:
-            body = (
-                f"body {operation.body_parameter.typename}"
-                if operation.body_parameter
-                else ""
-            )
-            query = (
-                f"query " + ", ".join([qp.name for qp in operation.query_parameters])
-                if operation.query_parameters
-                else ""
-            )
-            headers = (
-                f"header " + ", ".join([qp.name for qp in operation.header_parameters])
-                if operation.header_parameters
-                else ""
-            )
-            paths = (
-                f"path " + ", ".join([pp.name for pp in operation.path_parameters])
-                if operation.path_parameters
-                else ""
-            )
-            parameters = ", ".join(
-                [part for part in (paths, body, query, headers) if part]
-            )
-            print(f"\t{operation.verb} {operation.name}({parameters})")
-
-    for definition in doc.definitions:
-        print(definition)

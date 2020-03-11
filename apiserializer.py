@@ -278,10 +278,19 @@ class ApiViewEncoder(json.JSONEncoder):
         else:
             return json.JSONEncoder.default(self, o)
 
-if __name__ == '__main__':
-    import sys
-    logging.basicConfig()
+def cli():
+    import argparse
 
-    doc = openapi.Document(sys.argv[1])
+    parser = argparse.ArgumentParser('apiserializer')
+    parser.add_argument(type=str, dest='filename')
+    parser.add_argument('--debug', action='store_true', dest='debug', default=False)
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARN)
+    doc = openapi.Document(args.filename)
     out = json.dumps(doc, cls=ApiViewEncoder, indent=2)
     print(out)
+
+
+if __name__ == '__main__':
+    cli()
